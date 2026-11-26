@@ -1,0 +1,18 @@
+/* Dev harness only (never imported by element.tsx). Mimics the Home Assistant host: theme variables on :root and the host element,
+   and the same three brand faces element.tsx registers (served from public/fonts in dev). */
+@font-face { font-family: "Space Grotesk"; src: url("/fonts/space-grotesk.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("/fonts/inter.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/fonts/jetbrains-mono.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+
+:root {
+  --card-background-color: #ffffff;
+  --primary-text-color: #1b1f24;
+  --secondary-text-color: #5b6472;
+  --divider-color: #e0e3e8;
+  --secondary-background-color: #f2f4f7;
+  --primary-background-color: #fafafa;
+}
+
+/* ?theme=dark sets these on the container; they inherit into the panel's :host fallbacks. */
+.dev-page { display: block; min-height: 100vh; background: var(--primary-background-color); }
+body { margin: 0; background: var(--primary-background-color); }
