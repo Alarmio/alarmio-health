@@ -1,0 +1,47 @@
+name: Bug report
+description: Alarmio Health shows something wrong, or does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Please do not paste your Alarmio session token, passwords, your proxy URL or your device names.** Replace them with `xxx`.
+  - type: input
+    id: version
+    attributes:
+      label: Alarmio Health version
+      description: Shown in HACS, or in `manifest.json`.
+      placeholder: "0.1.1"
+    validations:
+      required: true
+  - type: input
+    id: ha
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.11.3"
+    validations:
+      required: true
+  - type: input
+    id: foxace
+    attributes:
+      label: foXaCe (Ajax) integration version
+      placeholder: "0.39.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Say which screen or entity shows it, and what the panel's headline says.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Home Assistant log lines
+      description: Lines mentioning `alarmio_health`, with any addresses, tokens or names removed.
+      render: text

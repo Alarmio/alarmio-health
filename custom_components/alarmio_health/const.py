@@ -3,7 +3,7 @@
 from datetime import timedelta
 
 DOMAIN = "alarmio_health"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 SCAN_INTERVAL = timedelta(seconds=60)
 STORE_KEY = f"{DOMAIN}.incidents"
 STORE_VERSION = 1
