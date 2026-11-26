@@ -62,6 +62,8 @@ Limitations, stated plainly:
 
 ## Privacy
 
+The full privacy notice is in [PRIVACY.md](PRIVACY.md). This section lists exactly what is sent.
+
 Once per check cycle the integration sends a heartbeat to Alarmio, authenticated with your existing
 Alarmio session. If sending fails, heartbeats are queued (bounded) and the panel shows
 "Not reporting to Alarmio". The payload carries `schema: 1`. Alarmio identifies you from the session token
