@@ -154,6 +154,7 @@ async def test_probe_and_heartbeat_exceptions_become_unknown(hass: HomeAssistant
     coordinator = _build(hass, _ok, _snapshot())
     coordinator.heartbeat = MagicMock()
     coordinator.heartbeat.send = AsyncMock(side_effect=ValueError("x"))
+    coordinator.heartbeat.last_exchange = None  # a bare MagicMock would hand blame() mock timings
     coordinator.adapter.session_token.side_effect = KeyError("y")
     data = await coordinator._async_update_data()
     assert set(data) == set(PROBES)

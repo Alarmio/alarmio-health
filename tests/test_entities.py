@@ -51,9 +51,9 @@ async def test_entities_are_registered_with_stable_unique_ids(hass: HomeAssistan
     }
     actual = {(e.domain, e.unique_id) for e in registry.entities.values() if e.platform == DOMAIN}
     assert actual == expected
-    assert len(expected) == 14
+    assert len(expected) == 20
     entity_ids = [e.entity_id for e in registry.entities.values() if e.platform == DOMAIN]
-    assert len(set(entity_ids)) == 14
+    assert len(set(entity_ids)) == 20
     assert "sensor.alarmio_health_alarmio_reachability" in entity_ids
     assert "binary_sensor.alarmio_health_event_stream_problem" in entity_ids
     assert "switch.alarmio_health_share_diagnostics_with_alarmio" in entity_ids
@@ -153,3 +153,17 @@ async def test_entities_stay_available_when_update_failed(hass: HomeAssistant) -
     registry = er.async_get(hass)
     for entity in [e for e in registry.entities.values() if e.platform == DOMAIN]:
         assert hass.states.get(entity.entity_id).state != "unavailable"
+
+
+async def test_only_the_foxace_status_sensor_is_deprecated(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    await _push(hass, entry, foxace=_result("foxace", Status.HEALTHY, detail="ok"))
+    foxace = hass.states.get(_eid(hass, "sensor", "e1_foxace_status"))
+    assert foxace.attributes["detail"] == "ok"
+    assert "Will be removed in a later version" in foxace.attributes["deprecated"]
+    entry.runtime_data.async_set_updated_data({})
+    await hass.async_block_till_done()
+    assert "deprecated" in hass.states.get(_eid(hass, "sensor", "e1_foxace_status")).attributes
+    for probe in PROBES:
+        if probe != "foxace":
+            assert "deprecated" not in hass.states.get(_eid(hass, "sensor", f"e1_{probe}_status")).attributes

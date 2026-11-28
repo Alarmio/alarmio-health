@@ -55,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AlarmioHealthEntry) -> b
     )
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+    entry.async_create_background_task(hass, coordinator.sampler.run(), "alarmio_health_loop_lag")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     from .panel import async_register_panel  # imported here: needs http and frontend

@@ -24,6 +24,11 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+DEPRECATED_FOXACE_TEXT = (
+    "Will be removed in a later version. Use the Gateway, Internet connection, Alarmio and Ajax cloud sensors."
+)
+
+
 class StatusSensor(HealthEntity, SensorEntity):
     """Health status of one probe."""
 
@@ -45,9 +50,12 @@ class StatusSensor(HealthEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
-        """Return the (length-bounded) probe detail."""
+        """Return the (length-bounded) probe detail; the foXaCe sensor also carries a deprecation note."""
         result = self._result(self._probe)
-        return {"detail": result.detail[:MAX_DETAIL_LENGTH]} if result else {}
+        attrs = {"detail": result.detail[:MAX_DETAIL_LENGTH]} if result else {}
+        if self._probe == "foxace":
+            attrs["deprecated"] = DEPRECATED_FOXACE_TEXT
+        return attrs
 
 
 class LatencySensor(HealthEntity, SensorEntity):

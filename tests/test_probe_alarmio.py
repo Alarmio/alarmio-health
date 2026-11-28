@@ -21,6 +21,18 @@ async def test_healthy_on_200() -> None:
     assert result.latency_ms is not None
 
 
+async def test_reachability_get_asks_for_a_fresh_connection() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"status": "ok"})
+
+    async with _client(handler) as c:
+        await probe_alarmio(c, "https://alarmio.test", lambda: NOW)
+    assert seen[0].headers["connection"] == "close"
+
+
 async def test_degraded_when_slower_than_threshold() -> None:
     async with _client(lambda r: httpx.Response(200, json={"status": "ok"})) as c:
         result = await probe_alarmio(c, "https://alarmio.test", lambda: NOW, degraded_ms=0.0)

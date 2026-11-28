@@ -1,6 +1,6 @@
 # Alarmio Health privacy notice
 
-Last updated: 26 November 2026
+Last updated: 28 November 2026
 
 This notice explains what the Alarmio Health integration for Home Assistant sends to Alarmio, why, and what you can do about it. It is written to follow South Africa's Protection of Personal Information Act (POPIA).
 
@@ -19,7 +19,11 @@ About once a minute, Alarmio Health sends a small status message (a "heartbeat")
 | Item | Detail |
 |---|---|
 | Format version, time sent, integration version | Technical housekeeping |
-| For each of the six checks | Its name, status (healthy, degraded, down or unknown), response time and a short reason |
+| For each check (six, plus the three network checks) | Its name, status (healthy, degraded, down or unknown), response time and a short reason |
+| Network timing | For your router, the internet check and the route to Alarmio: how many pings were sent and answered, and the timings. Also how late Home Assistant's own loop ran |
+| An echo id | A random number made for each heartbeat, so Alarmio can report how long it took to answer. It identifies nothing |
+
+The network timing carries counts and times only. **Your router's address and the internet address you ping never leave Home Assistant.**
 
 The short reasons can mention the foXaCe version and counts such as "2 offline, 1 low battery".
 
@@ -32,6 +36,10 @@ The short reasons can mention the foXaCe version and counts such as "2 offline, 
 | A list of your Ajax devices: **the names you gave them**, whether each is online, malfunction count, battery and signal | Helps us spot failing devices. It is shortened to about 12 KiB, most urgent devices first |
 
 The panel's **What is sent to Alarmio** section shows the exact data. Turning the switch off stops the extra data from the next heartbeat on.
+
+## The internet check contacts a third party
+
+The Internet connection check pings an address on the internet from your network. The default is `1.1.1.1` (Cloudflare), so Cloudflare can see a ping from your connection. You can change the address, or turn the check off, under **Settings > Devices & services > Alarmio Health > Configure**. The router check only contacts your own router. If pings are not allowed on your Home Assistant system, the router and the internet address get TCP connection attempts (ports 80 and 443) instead of pings. In direct mode (without the Alarmio proxy) Home Assistant also makes one unauthenticated request a minute to Ajax's API host (`api.ajax.systems`) to check that it is reachable; nothing about you is sent in it. The addresses are stored in Home Assistant and are not sent to Alarmio. The diagnostics sharing described above is unchanged.
 
 ## What is never sent
 

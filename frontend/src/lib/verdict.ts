@@ -1,4 +1,4 @@
-import type { Link, Status } from "./types";
+import type { Blamed, Link, Status, Summary } from "./types";
 
 export interface Verdict { tone: Status; headline: string; hint: string }
 
@@ -50,4 +50,38 @@ export function verdict(links: Link[], downSince: string | null, now: Date): Ver
     return UNKNOWN_VERDICT;
   }
   return { tone: "healthy", headline: "Alarm events are reaching Home Assistant", hint: "" };
+}
+
+const BLAME_HEADLINE: Record<Blamed, Record<"degraded" | "down", string>> = {
+  ha_host: { degraded: "Home Assistant was busy for a moment", down: "Home Assistant is not responding" },
+  gateway: { degraded: "Your router is slow or dropping packets", down: "Your router is not answering" },
+  internet: { degraded: "Your internet connection is unreliable", down: "Your internet connection is down" },
+  route: { degraded: "The route to Alarmio is unreliable", down: "Alarmio cannot be reached from here" },
+  alarmio: { degraded: "Alarmio is slow to answer", down: "Alarmio is not answering" },
+  ajax_cloud: { degraded: "Ajax's cloud is having trouble", down: "Ajax's cloud cannot be reached" },
+};
+
+/** Direct mode: the chain has nodes but none is Alarmio. Unknown router/internet nodes are tolerated (routers ignore pings). */
+const OPTIONAL_DIRECT_NODES: readonly string[] = ["gateway", "internet"];
+
+/** Blame-aware verdict; with no blame (or a healthy/unknown cause) it falls back to the link-based verdict. */
+export function summaryVerdict(summary: Summary, now: Date): Verdict {
+  const chain = summary.chain;
+  const directMode = chain.length > 0 && !chain.some((n) => n.id === "alarmio");
+  // Direct mode has no Alarmio link, so it must not feed the headline ("Alarmio cannot be checked").
+  const links = directMode ? summary.links.filter((l) => l.id !== "alarmio") : summary.links;
+  const fromLinks = verdict(links, summary.down_since, now);
+  const blamed = summary.trace.blamed;
+  const status = summary.cause_status;
+  if (blamed !== null && (status === "degraded" || status === "down")) {
+    // Events have stopped at a legacy link: that outranks a merely degraded blame.
+    if (status === "degraded" && fromLinks.tone === "down") return fromLinks;
+    return { tone: status, headline: BLAME_HEADLINE[blamed][status], hint: summary.cause };
+  }
+  if (directMode && status === "healthy" && fromLinks.tone !== "down" && fromLinks.tone !== "degraded") {
+    const othersHealthy = links.filter((l) => l.id !== "ha").every((l) => l.status === "healthy");
+    const chainOk = chain.every((n) => (n.evaluated && n.status === "healthy") || (OPTIONAL_DIRECT_NODES.includes(n.id) && n.status === "unknown"));
+    return othersHealthy && chainOk ? { tone: "healthy", headline: "Alarm events are reaching Home Assistant", hint: "" } : UNKNOWN_VERDICT;
+  }
+  return fromLinks;
 }

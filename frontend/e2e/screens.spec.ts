@@ -3,10 +3,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const SCENARIOS = [
-  { mock: "healthy", headline: "Alarm events are reaching Home Assistant" },
-  { mock: "degraded", headline: "needs attention" },
-  { mock: "down", headline: "Events stopped at Alarmio" },
-  { mock: "empty", headline: "Not enough data yet to tell" },
+  { mock: "healthy", headline: "Alarm events are reaching Home Assistant", chain: 6, trace: true },
+  { mock: "degraded", headline: "Alarmio is slow to answer", chain: 6, trace: true },
+  { mock: "down", headline: "Alarmio cannot be reached from here", chain: 6, trace: true },
+  { mock: "route", headline: "The route to Alarmio is unreliable", chain: 6, trace: true },
+  { mock: "gateway", headline: "Your router is not answering", chain: 6, trace: true },
+  { mock: "direct", headline: "Alarm events are reaching Home Assistant", chain: 5, trace: true },
+  { mock: "empty", headline: "Not enough data yet to tell", chain: 4, trace: false },
 ] as const;
 const THEMES = ["light", "dark"] as const;
 const SIZES = [
@@ -36,10 +39,22 @@ for (const s of SCENARIOS) {
         await expect(h1).toContainText(s.headline);
         const chain = page.getByRole("list", { name: "Alarm signal chain" });
         await expect(chain).toBeVisible();
-        await expect(chain.locator("> li")).toHaveCount(4);
+        await expect(chain.locator("> li")).toHaveCount(s.chain);
+        const trace = page.getByRole("list", { name: "Where the last check spent its time" });
+        if (s.trace) {
+          await expect(page.getByRole("heading", { name: "Last check" })).toBeVisible();
+          await expect(trace).toBeVisible();
+        } else {
+          await expect(trace).toHaveCount(0);
+        }
+        if (s.mock === "route") {
+          await expect(page.locator('[data-blamed="true"]')).toHaveCount(1);
+          await expect(page.locator('[data-segment="route"][data-blamed="true"]')).toHaveCount(1);
+          await expect(chain.locator('[data-route="blamed"]')).toHaveCount(1);
+        }
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         expect(overflow).toBeLessThanOrEqual(0);
-        await page.screenshot({ path: `test-results/${s.mock}-${theme}-${size.name}.png`, fullPage: true });
+        await page.screenshot({ path: `test-results/${s.mock}-${theme}-${size.name}.png`, fullPage: true, animations: "disabled" });
         expect(errors.list).toEqual([]);
       });
     }
@@ -117,5 +132,5 @@ test("narrow: the menu button header is present and there is still one h1", asyn
   await page.goto("/?mock=healthy&narrow=1");
   await expect(page.locator("h1")).toHaveCount(1);
   await expect(page.locator("ha-menu-button")).toHaveCount(1);
-  await page.screenshot({ path: "test-results/narrow-healthy-light-mobile.png", fullPage: true });
+  await page.screenshot({ path: "test-results/narrow-healthy-light-mobile.png", fullPage: true, animations: "disabled" });
 });

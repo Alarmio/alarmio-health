@@ -3,14 +3,17 @@ import { Controls } from "./components/Controls";
 import { DeviceList } from "./components/DeviceList";
 import { IncidentList } from "./components/IncidentList";
 import { LatencyChart } from "./components/LatencyChart";
+import { EchoTrace } from "./components/EchoTrace";
+import { LegacyChain } from "./components/LegacyChain";
 import { SignalChain } from "./components/SignalChain";
 import { UptimeStrips } from "./components/UptimeStrips";
 import { Verdict } from "./components/Verdict";
+import { VersionLine } from "./components/VersionLine";
 import { AppHeader } from "./components/AppHeader";
 import { Button } from "./components/ui/button";
 import type { Api } from "./lib/api";
 import type { History, Incident, Range, Summary } from "./lib/types";
-import { verdict } from "./lib/verdict";
+import { summaryVerdict } from "./lib/verdict";
 import { haVar } from "./theme/tokens";
 
 export const REFRESH_MS = 30_000;
@@ -87,7 +90,7 @@ export function App({ api, narrow = false, registerMenu = NO_MENU }: AppProps) {
   // A failed refresh keeps the earlier history on screen; the notice replaces it only when there is none.
   const historyNotice = historyError && !historyLoaded;
   const unavailable = history.warning === "history_unavailable";
-  const v = summary ? verdict(summary.links, summary.down_since, new Date()) : null;
+  const v = summary ? summaryVerdict(summary, new Date()) : null;
   const historyStale = historyError && historyLoaded ? "History may be out of date." : null;
   return (
     <main className="mx-auto flex max-w-5xl flex-col gap-8 p-4 md:p-8" aria-busy={!summary && !summaryError}>
@@ -114,7 +117,14 @@ export function App({ api, narrow = false, registerMenu = NO_MENU }: AppProps) {
       </Verdict>
       {summary ? (
         <>
-          <SignalChain links={summary.links} />
+          {summary.chain.length > 0 ? (
+            <>
+              <SignalChain chain={summary.chain} blamed={summary.trace.blamed} causeStatus={summary.cause_status} />
+              <EchoTrace trace={summary.trace} proxyMode={summary.chain.some((n) => n.id === "alarmio")} causeStatus={summary.cause_status} />
+            </>
+          ) : (
+            <LegacyChain links={summary.links} />
+          )}
           <UptimeStrips
             history={history}
             range={range}
@@ -136,6 +146,7 @@ export function App({ api, narrow = false, registerMenu = NO_MENU }: AppProps) {
           </div>
           <DeviceList diagnostics={summary.diagnostics_preview} sharing={summary.share_diagnostics} />
           <Controls sharing={summary.share_diagnostics} preview={summary.diagnostics_preview} queued={summary.queued_heartbeats} onRunE2E={api.runE2E} />
+          <VersionLine version={summary.integration_version} foxaceVersion={summary.diagnostics_preview?.foxace_version ?? null} />
         </>
       ) : null}
     </main>

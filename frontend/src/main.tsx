@@ -1,10 +1,13 @@
 // Dev harness entry. The production entry is element.tsx; nothing here ships in www/panel.js.
-// ?mock=healthy|degraded|down|empty|error|slow|sparse  ?theme=light|dark  ?narrow=1 (shows the phone menu-button header)
+// ?view=chain|trace renders only the signal chain or the echo trace (component review before App wires it).
+// ?mock=healthy|degraded|down|empty|error|slow|sparse|route|gateway|direct  ?theme=light|dark  ?narrow=1 (shows the phone menu-button header)
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import css from "./index.css?inline";
 import "./dev.css";
 import { App } from "./App";
+import { EchoTrace } from "./components/EchoTrace";
+import { SignalChain } from "./components/SignalChain";
 import { createMockApi, SCENARIOS, type Scenario } from "./lib/mock";
 
 const DARK_THEME = {
@@ -33,8 +36,31 @@ const style = document.createElement("style");
 style.textContent = css;
 const mount = document.createElement("div");
 shadow.append(style, mount);
-createRoot(mount).render(
-  <StrictMode>
-    <App api={createMockApi(scenario)} narrow={params.get("narrow") === "1"} />
-  </StrictMode>,
-);
+const root = createRoot(mount);
+if (params.get("view") === "chain") {
+  void createMockApi(scenario).summary().then((summary) => {
+    root.render(
+      <StrictMode>
+        <div className="mx-auto max-w-6xl p-4">
+          <SignalChain chain={summary.chain} blamed={summary.trace.blamed} causeStatus={summary.cause_status} />
+        </div>
+      </StrictMode>,
+    );
+  });
+} else if (params.get("view") === "trace") {
+  void createMockApi(scenario).summary().then((summary) => {
+    root.render(
+      <StrictMode>
+        <div className="mx-auto max-w-6xl p-4">
+          <EchoTrace trace={summary.trace} proxyMode={scenario !== "direct"} causeStatus={summary.cause_status} />
+        </div>
+      </StrictMode>,
+    );
+  });
+} else {
+  root.render(
+    <StrictMode>
+      <App api={createMockApi(scenario)} narrow={params.get("narrow") === "1"} />
+    </StrictMode>,
+  );
+}

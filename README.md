@@ -40,14 +40,14 @@ Manual: copy `custom_components/alarmio_health` into your Home Assistant `custom
 
 ## What the checks do
 
-Every 60 seconds the integration runs six checks:
+Every 60 seconds the integration runs six checks, plus the three network checks described under [Network checks](#network-checks):
 
 | Check | What it looks at |
 |---|---|
 | Alarmio reachability | Whether Alarmio answers, and how fast |
 | Alarmio certificate | Whether the TLS certificate is valid and not close to expiry |
 | Alarmio session | Whether your session is still accepted, using the heartbeat |
-| foXaCe integration | Whether foXaCe is loaded and working in proxy mode |
+| foXaCe integration (deprecated, will be removed in a later version) | Whether foXaCe is loaded and working in proxy mode |
 | Event stream | Whether foXaCe's event stream to Alarmio is connected |
 | Ajax hub and devices | Hub online state and device health as foXaCe reports it |
 
@@ -60,18 +60,50 @@ Limitations, stated plainly:
 - **Silence while the system is disarmed is never a failure.** Ajax only sends events when armed, so a quiet stream is normal then.
 - **"Unknown" means we could not tell.** It is not a pass and not a fail.
 
+## Network checks
+
+Three more checks look at the network between Home Assistant and Alarmio, so a problem in your own
+network can be told apart from a problem at Alarmio or Ajax:
+
+| Check | What it looks at |
+|---|---|
+| Gateway | Whether your router answers, and how fast. The router address is detected automatically |
+| Internet connection | Whether an address on the internet answers (default `1.1.1.1`), and how fast |
+| Ajax cloud | Whether Ajax's cloud answers normally, as seen from Alarmio (needs the Alarmio server update, see below) |
+
+The checks also time the route to Alarmio. Together they let the integration name the first broken link in
+plain words, for example "Packets to Alarmio were lost (3 of 5 pings). Alarmio itself answered in 3 ms."
+That line is in the summary the panel reads (`chain`, `trace` and `cause`). The panel does not show it yet.
+
+**Options.** Settings > Devices & services > Alarmio Health > **Configure** opens "Network checks":
+
+- **Router address**: leave empty to detect it, or enter an IP address or host name to override.
+- **Internet address to ping**: default `1.1.1.1` (Cloudflare).
+- **Check the internet connection**: turn it off if you do not want Home Assistant to contact a third party. The Internet connection entity then reports unknown.
+
+**Ping or TCP.** When Home Assistant allows ICMP pings, each hop is pinged 5 times per cycle and the
+answer count and timings are recorded. Where ICMP is not available, the integration times a TCP
+connection instead. That is a limited mode: it shows whether the address answers and how fast, but it
+does **not** measure packet loss.
+
+**Timing from the Alarmio side.** Each heartbeat carries a random echo id. A server with the matching
+update replies with how long Alarmio itself took, which separates a slow route from a slow Alarmio. This
+needs the server-side update from Alarmio's Plan 1 (not yet deployed). Until then, or against an older
+server that answers HTTP 422, the integration falls back to the basic heartbeat and the panel data says
+server timing is unavailable. That is never shown as healthy.
+
 ## Privacy
 
 The full privacy notice is in [PRIVACY.md](PRIVACY.md). This section lists exactly what is sent.
 
 Once per check cycle the integration sends a heartbeat to Alarmio, authenticated with your existing
 Alarmio session. If sending fails, heartbeats are queued (bounded) and the panel shows
-"Not reporting to Alarmio". The payload carries `schema: 1`. Alarmio identifies you from the session token
+"Not reporting to Alarmio". The payload carries `schema: 2` (or `schema: 1` when the server does not support the echo). Alarmio identifies you from the session token
 on the request; the payload itself carries no subscriber ID.
 
 | Tier | When | What is sent |
 |---|---|---|
-| Always on | Always | `schema`, `sent_at`, `integration_version`, and for each probe its name, status, latency and a short failure reason |
+| Always on | Always | `schema`, `sent_at`, `integration_version`, and for each probe its name, status, latency and a short failure reason. Also a random `echo` id and a `net` block: per hop (gateway, internet, route to Alarmio) the pings sent and answered and the timings, plus Home Assistant's own loop delay. No addresses |
 | Diagnostics | Only when **Share diagnostics with Alarmio** is on (off by default) | `reconnects`, `ha_version`, `foxace_version`, `proxy_mode`, `armed`, and the device list: device **names**, online flag, malfunction count, battery and signal. `devices_truncated` is added when the list had to be shortened |
 
 A failure reason is free text such as "foXaCe 0.39.0 has not been tested with Alarmio Health" or
@@ -105,6 +137,12 @@ All entities belong to one service device, "Alarmio Health". Unique IDs are `<en
 | `foxace_problem` | foXaCe integration problem | binary sensor |
 | `stream_problem` | Event stream problem | binary sensor |
 | `ajax_problem` | Ajax hub and devices problem | binary sensor |
+| `gateway_status` | Gateway | sensor |
+| `internet_status` | Internet connection | sensor |
+| `ajaxcloud_status` | Ajax cloud | sensor |
+| `gateway_problem` | Gateway problem | binary sensor |
+| `internet_problem` | Internet connection problem | binary sensor |
+| `ajaxcloud_problem` | Ajax cloud problem | binary sensor |
 | `alarmio_latency` | Alarmio latency | sensor (ms) |
 | `share_diagnostics` | Share diagnostics with Alarmio | switch |
 
@@ -112,12 +150,14 @@ All entities belong to one service device, "Alarmio Health". Unique IDs are `<en
 
 A sidebar item named **Alarmio Health** opens the panel:
 
-- **Verdict:** one headline saying whether alarm events are reaching Home Assistant.
-- **Signal chain:** Ajax hub, Alarmio, foXaCe, Home Assistant, with a gap drawn where the chain is broken. Status is always shown as text and an icon, never colour alone.
-- **Uptime strips:** per-check history over 24h, 7d or 30d.
+- **Verdict:** one headline saying whether alarm events are reaching Home Assistant. When a hop is to blame it says which one in plain words, with the reason underneath (for example "The route to Alarmio is unreliable: Packets to Alarmio were lost (3 of 5 pings). Alarmio itself answered in 3 ms.").
+- **Signal chain:** Ajax hub, Ajax cloud, Alarmio, Internet, Router and Home Assistant, in the direction an event travels. Hops beyond the first break are dashed and marked "Not checked" (they are not shown as failed). When the route to Alarmio is the problem, the line between Alarmio and Internet carries the warning. Status is always shown as text and an icon, never colour alone.
+- **Last check:** one bar showing where the most recent check spent its time: router, internet, route to Alarmio, Alarmio itself and Ajax's cloud. Only the segment at fault is coloured. Hops that were not reached show as dashed placeholders. It needs the Alarmio server update; until then it shows "server timing unavailable" for the Alarmio parts.
+- **Uptime strips:** per-check history over 24h, 7d or 30d for the router, internet, Alarmio, Ajax cloud, event stream and Ajax devices. (The foXaCe strip is gone; the foXaCe sensor is deprecated.)
 - **Alarmio latency:** a chart over the same range, with a marker at 1000 ms. The figure includes TCP and TLS connection setup (checks are a minute apart, so the connection is not reused), so about 500 ms is normal from many homes. Alarmio is reported as "needs attention" only after two slow readings in a row; one slow reading shows on the chart but does not change the status. An outage is never delayed.
 - **Incidents:** open and closed incidents.
 - **Devices:** the diagnostics that would be shared, when sharing is on.
+- **Version line:** the Alarmio Health version (and the foXaCe version when diagnostics sharing is on) at the bottom.
 - **Controls:** the **Run end-to-end test** button, the sharing state, and the "What is sent to Alarmio" disclosure. The test is read-only (it does not arm, disarm or change anything) and is rate-limited to once per 30 seconds; a repeat press within that time shows the previous result.
 
 ## Development

@@ -13,7 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from custom_components.alarmio_health import history as history_mod
-from custom_components.alarmio_health.const import CONF_SHARE_DIAGNOSTICS, DOMAIN
+from custom_components.alarmio_health.const import CONF_SHARE_DIAGNOSTICS, DOMAIN, VERSION
 from custom_components.alarmio_health.foxace_adapter import FoxaceAdapter
 from custom_components.alarmio_health.models import ProbeResult, Status
 
@@ -66,6 +66,12 @@ async def test_summary_returns_chain_and_sharing_state(hass: HomeAssistant, hass
     assert reply["result"]["share_diagnostics"] is False
     assert reply["result"]["queued_heartbeats"] == 0
     assert reply["result"]["diagnostics_preview"] is None
+    assert {"chain", "trace", "cause"} <= set(reply["result"])
+    assert isinstance(reply["result"]["chain"], list)
+    assert set(reply["result"]["trace"]) == {"blamed", "segments"}
+    assert isinstance(reply["result"]["cause"], str)
+    assert reply["result"]["integration_version"] == VERSION
+    assert reply["result"]["cause_status"] in {"healthy", "degraded", "down", "unknown"}
 
 
 async def test_summary_includes_preview_when_sharing(hass: HomeAssistant, hass_ws_client: WebSocketGenerator) -> None:

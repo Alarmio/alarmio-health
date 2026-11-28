@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, PROBES
+from .const import DOMAIN, PROBES, VERSION
 from .coordinator import AlarmioHealthCoordinator
 from .history import shape_latency_series, shape_statistics_series, shape_status_series
 from .summary import build_summary
@@ -90,7 +90,10 @@ def async_register_commands(hass: HomeAssistant) -> None:
 @_guarded("summary", "Could not build the summary. Check the Home Assistant log.")
 async def ws_summary(hass: HomeAssistant, coordinator: AlarmioHealthCoordinator, msg: dict[str, Any]) -> dict[str, Any]:
     """The signal chain, sharing state and (only when sharing) the next diagnostics block."""
-    result = build_summary(coordinator.data or {}, coordinator.tracker.open_incidents)
+    result = build_summary(
+        coordinator.data or {}, coordinator.tracker.open_incidents, coordinator.net, coordinator.verdict
+    )
+    result["integration_version"] = VERSION
     result["share_diagnostics"] = coordinator.share_diagnostics
     result["queued_heartbeats"] = coordinator.heartbeat.queued
     result["diagnostics_preview"] = await coordinator.diagnostics_preview() if coordinator.share_diagnostics else None

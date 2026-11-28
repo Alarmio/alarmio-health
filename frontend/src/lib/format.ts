@@ -1,7 +1,10 @@
 import type { Range, Status } from "./types";
 
-export const PROBE_IDS = ["alarmio", "stream", "foxace", "ajax"] as const;
-export const PROBE_TITLES: Record<string, string> = { alarmio: "Alarmio", stream: "Event stream", foxace: "foXaCe", ajax: "Ajax devices" };
+export const PROBE_IDS = ["gateway", "internet", "alarmio", "ajaxcloud", "stream", "ajax"] as const;
+export const PROBE_TITLES: Record<string, string> = {
+  gateway: "Router", internet: "Internet", alarmio: "Alarmio", ajaxcloud: "Ajax cloud", stream: "Event stream",
+  ajax: "Ajax devices", foxace: "foXaCe", tls: "Alarmio certificate", session: "Alarmio session",
+};
 export const probeTitle = (probe: string): string => PROBE_TITLES[probe] ?? probe;
 
 export const STATUS_LABEL: Record<Status, string> = { healthy: "Healthy", degraded: "Needs attention", down: "Down", unknown: "Unknown" };
@@ -63,4 +66,10 @@ export function axisTicks(min: number, max: number, range: Range): number[] {
     for (let d = first; d.getTime() <= max; d.setDate(d.getDate() + step)) ticks.push(d.getTime());
   }
   return ticks;
+}
+
+/** Milliseconds for display: one decimal under 10 so a 0.4 ms hop does not read as 0, whole numbers above. */
+export function formatMs(ms: number): string {
+  const r = Math.round(ms * 10) / 10;
+  return r < 10 ? `${r.toFixed(1)} ms` : `${Math.round(ms)} ms`;
 }

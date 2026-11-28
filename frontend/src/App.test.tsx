@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, REFRESH_MS } from "./App";
@@ -30,6 +30,41 @@ const tickRefresh = async (): Promise<void> => {
   });
 };
 const wrap = (over: Partial<Api>): Api => ({ ...createMockApi("healthy"), ...over });
+
+describe("App echo chain wiring", () => {
+  const load = async (name: Parameters<typeof createMockApi>[0]): Promise<void> => {
+    render(<App api={createMockApi(name)} />);
+    await flush();
+  };
+  const chainItems = (): HTMLElement[] => within(screen.getByRole("list", { name: "Alarm signal chain" })).getAllByRole("listitem");
+  it("blames the route with the cause sentence, six hops and the trace", async () => {
+    await load("route");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("The route to Alarmio is unreliable");
+    expect(screen.getAllByText(/Packets to Alarmio were lost \(3 of 5 pings\)\. Alarmio itself answered in 3 ms\./).length).toBeGreaterThan(0);
+    expect(chainItems()).toHaveLength(6);
+    expect(screen.getByRole("heading", { level: 2, name: "Last check" })).toBeInTheDocument();
+  });
+  it("names the router when the gateway is down", async () => {
+    await load("gateway");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Your router is not answering");
+  });
+  it("keeps the healthy headline and shows six hops", async () => {
+    await load("healthy");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Alarm events are reaching Home Assistant");
+    expect(chainItems()).toHaveLength(6);
+  });
+  it("falls back to the legacy four-item chain without a Last check section", async () => {
+    await load("empty");
+    expect(chainItems()).toHaveLength(4);
+    expect(screen.queryByRole("heading", { name: "Last check" })).toBeNull();
+  });
+  it("shows the version line and keeps one h1 and one status region", async () => {
+    await load("healthy");
+    expect(screen.getByText(/^Alarmio Health 0\.2\.0( \/ foXaCe \d[\d.]*)?$/)).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+  });
+});
 
 describe("App", () => {
   it("shows a loading state, then the verdict as the only h1", async () => {

@@ -7,14 +7,18 @@ import { Controls } from "./Controls";
 import { DeviceList, sortDevices } from "./DeviceList";
 import { IncidentList } from "./IncidentList";
 import { LatencyChart } from "./LatencyChart";
+import { LegacyChain } from "./LegacyChain";
+import { EchoTrace } from "./EchoTrace";
 import { SignalChain } from "./SignalChain";
 import { UptimeStrips } from "./UptimeStrips";
 import { Verdict } from "./Verdict";
+import { VersionLine } from "./VersionLine";
 import { Wordmark } from "./Wordmark";
 import { useState } from "react";
-import type { DeviceDiag, Diagnostics, Link, Range } from "@/lib/types";
+import type { ChainNode, DeviceDiag, Diagnostics, Link, Range } from "@/lib/types";
 import { installDomMatchers, stubResizeObserver } from "@/test-utils";
-import { statusColor } from "@/theme/tokens";
+import { createMockApi } from "@/lib/mock";
+import { chartSeries, haVar, statusColor } from "@/theme/tokens";
 
 beforeAll(() => {
   stubResizeObserver();
@@ -52,9 +56,9 @@ describe("Verdict", () => {
   });
 });
 
-describe("SignalChain", () => {
+describe("LegacyChain", () => {
   it("shows four nodes in order with latency in ms", () => {
-    render(<SignalChain links={chain} />);
+    render(<LegacyChain links={chain} />);
     const list = screen.getByRole("list", { name: "Alarm signal chain" });
     const items = within(list).getAllByRole("listitem");
     expect(items).toHaveLength(4);
@@ -64,14 +68,14 @@ describe("SignalChain", () => {
     expect(items[1]).not.toHaveTextContent("ms");
   });
   it("draws the connector after a down node dashed in the down colour, others solid", () => {
-    const { container } = render(<SignalChain links={chain} />);
+    const { container } = render(<LegacyChain links={chain} />);
     const connectors = [...container.querySelectorAll<HTMLElement>("[data-connector]")];
     expect(connectors.map((c) => c.dataset.connector)).toEqual(["solid", "dashed", "solid"]);
     expect(connectors[1]?.style.borderStyle).toBe("dashed");
     expect(connectors[1]?.style.borderColor).toBe(statusColor.down.toLowerCase().replace(/^#(..)(..)(..)$/, (_m, r: string, g: string, b: string) => `rgb(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)})`));
   });
   it("gives every status its own icon shape", () => {
-    const { container } = render(<SignalChain links={[...chain, link("ajax", "X", "degraded")]} />);
+    const { container } = render(<LegacyChain links={[...chain, link("ajax", "X", "degraded")]} />);
     const icons = new Map<string, string>();
     for (const el of container.querySelectorAll("[data-status-icon]")) {
       const status = el.getAttribute("data-status") ?? "";
@@ -81,8 +85,100 @@ describe("SignalChain", () => {
     expect(new Set(icons.values()).size).toBe(4);
   });
   it("marks list roles explicitly", () => {
-    render(<SignalChain links={chain} />);
+    render(<LegacyChain links={chain} />);
     expect(screen.getByRole("list", { name: "Alarm signal chain" }).getAttribute("role")).toBe("list");
+  });
+});
+
+const rgb = (hex: string): string => hex.toLowerCase().replace(/^#(..)(..)(..)$/, (_m, r: string, g: string, b: string) => `rgb(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)})`);
+const mockChain = async (name: "healthy" | "route" | "gateway" | "direct" | "empty"): Promise<ChainNode[]> => (await createMockApi(name).summary()).chain;
+const nodeEl = (container: HTMLElement, id: string): HTMLElement => {
+  const el = container.querySelector<HTMLElement>(`[data-node="${id}"]`);
+  if (!el) throw new Error(`no node ${id}`);
+  return el;
+};
+
+describe("SignalChain", () => {
+  it("renders six evaluated nodes in event order with solid connectors", async () => {
+    const { container } = render(<SignalChain chain={await mockChain("healthy")} blamed={null} causeStatus="healthy" />);
+    const list = screen.getByRole("list", { name: "Alarm signal chain" });
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(6);
+    expect(items.map((i) => i.getAttribute("data-node"))).toEqual(["ajax_hub", "ajax_cloud", "alarmio", "internet", "gateway", "ha"]);
+    expect(items.every((i) => i.getAttribute("data-evaluated") === "true")).toBe(true);
+    expect(within(list).getByText("Router")).toBeInTheDocument();
+    expect(within(list).getByText("Ajax cloud")).toBeInTheDocument();
+    const connectors = [...container.querySelectorAll<HTMLElement>("[data-connector]")];
+    expect(connectors).toHaveLength(5);
+    expect(connectors.every((c) => c.dataset.connector === "solid")).toBe(true);
+  });
+  it("shows nodes beyond the break as Not checked, dashed, and never as Down", async () => {
+    const { container } = render(<SignalChain chain={await mockChain("gateway")} blamed="gateway" causeStatus="down" />);
+    for (const id of ["internet", "alarmio", "ajax_cloud", "ajax_hub"]) {
+      const el = nodeEl(container, id);
+      expect(el.dataset.evaluated).toBe("false");
+      expect(el).toHaveTextContent("Not checked");
+      expect(el).not.toHaveTextContent("Down");
+      expect(el.querySelector("[data-status-icon]")?.getAttribute("data-status")).toBe("unknown");
+      expect(el.querySelector<HTMLElement>("[data-border]")?.style.borderStyle).toBe("dashed");
+    }
+    expect(nodeEl(container, "gateway").querySelector<HTMLElement>("[data-border]")?.style.borderStyle).toBe("solid");
+    expect(nodeEl(container, "gateway")).toHaveTextContent("Down");
+    const connectors = [...container.querySelectorAll<HTMLElement>("[data-connector]")];
+    expect(connectors[0]?.dataset.connector).toBe("dashed");
+    expect(connectors[3]?.dataset.connector).toBe("dashed");
+    expect(connectors.slice(0, 4).every((c) => c.style.borderStyle === "dashed")).toBe(true);
+  });
+  it("styles the blamed route connector with the cause status, icon and a screen-reader sentence", async () => {
+    const { container } = render(<SignalChain chain={await mockChain("route")} blamed="route" causeStatus="degraded" />);
+    const blamed = container.querySelectorAll<HTMLElement>('[data-route="blamed"]');
+    expect(blamed).toHaveLength(1);
+    const el = blamed[0] as HTMLElement;
+    expect(el).toHaveTextContent("Route to Alarmio: Needs attention");
+    expect(el.dataset.connector).toBe("dashed");
+    expect(el.style.borderColor).toBe(rgb(statusColor.degraded));
+    expect(el.querySelector('[data-status="degraded"]')).not.toBeNull();
+    expect(el.querySelector('[data-status="degraded"]')?.getAttribute("class")).toContain("size-5");
+  });
+  it("does not mark the route when something else is blamed", async () => {
+    const { container } = render(<SignalChain chain={await mockChain("healthy")} blamed="alarmio" causeStatus="degraded" />);
+    expect(container.querySelectorAll('[data-route="blamed"]')).toHaveLength(0);
+  });
+  it("renders five nodes in direct mode", async () => {
+    render(<SignalChain chain={await mockChain("direct")} blamed={null} causeStatus="healthy" />);
+    expect(within(screen.getByRole("list", { name: "Alarm signal chain" })).getAllByRole("listitem")).toHaveLength(5);
+  });
+  it("formats latency with one decimal under 10 ms and whole ms above", () => {
+    const node = (id: ChainNode["id"], latency_ms: number): ChainNode => ({ id, label: id, status: "healthy", latency_ms, detail: "", evaluated: true });
+    const { container } = render(<SignalChain chain={[node("gateway", 0.4), node("internet", 34), node("ha", 9.96)]} blamed={null} causeStatus="healthy" />);
+    expect(nodeEl(container, "gateway")).toHaveTextContent("0.4 ms");
+    expect(nodeEl(container, "internet")).toHaveTextContent("34 ms");
+    expect(nodeEl(container, "ha")).toHaveTextContent("10 ms");
+    expect(nodeEl(container, "internet")).not.toHaveTextContent("34.0");
+  });
+  it("renders nothing for an empty chain", () => {
+    const { container } = render(<SignalChain chain={[]} blamed={null} causeStatus="unknown" />);
+    expect(container.innerHTML).toBe("");
+  });
+});
+
+describe("SignalChain details", () => {
+  const n = (over: Partial<ChainNode>): ChainNode => ({ id: "gateway", label: "Router", status: "unknown", latency_ms: null, detail: "Your router does not answer pings, so it cannot be measured.", evaluated: true, ...over });
+  it("shows the detail under an evaluated node that is not healthy", () => {
+    for (const status of ["unknown", "degraded", "down"] as const) {
+      const { container, unmount } = render(<SignalChain chain={[n({ status })]} blamed={null} causeStatus="healthy" />);
+      const el = container.querySelector<HTMLElement>("[data-node-detail]");
+      expect(el).toHaveTextContent("Your router does not answer pings, so it cannot be measured.");
+      expect(el?.style.color).toBe(haVar.textMuted);
+      unmount();
+    }
+  });
+  it("shows no detail for healthy, unevaluated or empty-detail nodes", () => {
+    for (const node of [n({ status: "healthy" }), n({ evaluated: false }), n({ detail: "" })]) {
+      const { container, unmount } = render(<SignalChain chain={[node]} blamed={null} causeStatus="healthy" />);
+      expect(container.querySelector("[data-node-detail]")).toBeNull();
+      unmount();
+    }
   });
 });
 
@@ -116,11 +212,21 @@ describe("UptimeStrips", () => {
   it("shows a percentage or an en dash per row, with a text summary", () => {
     const { container } = render(<UptimeStrips history={history} range="24h" onRangeChange={() => {}} now={now} />);
     const rows = [...container.querySelectorAll("[data-probe]")];
-    expect(rows.map((r) => r.getAttribute("data-probe"))).toEqual(["alarmio", "stream", "foxace", "ajax"]);
-    expect(rows[0]).toHaveTextContent(/9\d\.\d%/);
-    expect(rows[1]).toHaveTextContent("–");
+    expect(rows.map((r) => r.getAttribute("data-probe"))).toEqual(["gateway", "internet", "alarmio", "ajaxcloud", "stream", "ajax"]);
+    expect(rows[2]).toHaveTextContent(/9\d\.\d%/);
+    expect(rows[4]).toHaveTextContent("–");
     expect(screen.getByText(/Alarmio: 9\d\.\d% up in the last 24 hours, 1 outage/)).toBeInTheDocument();
     expect(screen.getByText("Event stream: no data in the last 24 hours")).toBeInTheDocument();
+  });
+  it("renders six hop rows with their titles and no foXaCe row", () => {
+    const ids = ["gateway", "internet", "alarmio", "ajaxcloud", "stream", "ajax"];
+    const full = { status: Object.fromEntries(ids.map((id) => [id, [{ t: "2026-11-25T12:00:00Z", s: "healthy" as const }]])), latency: [] };
+    const { container } = render(<UptimeStrips history={full} range="24h" onRangeChange={() => {}} now={now} />);
+    const rows = [...container.querySelectorAll("[data-probe]")];
+    expect(rows.map((r) => r.getAttribute("data-probe"))).toEqual(ids);
+    expect(rows.map((r) => r.querySelector("span")?.textContent)).toEqual(["Router", "Internet", "Alarmio", "Ajax cloud", "Event stream", "Ajax devices"]);
+    expect(container.querySelector("[data-probe='foxace']")).toBeNull();
+    expect(screen.queryByText("foXaCe")).toBeNull();
   });
   it("shows the unavailable notice instead of strips", () => {
     const { container } = render(<UptimeStrips history={history} range="24h" onRangeChange={() => {}} unavailable />);
@@ -216,6 +322,15 @@ describe("IncidentList", () => {
     expect(screen.getByText("17 min")).toBeInTheDocument();
     expect(screen.getByText("1 h 5 min")).toBeInTheDocument();
     expect(screen.getByText("Event stream")).toBeInTheDocument();
+  });
+  it("titles a gateway incident Router and an old foxace one foXaCe, with the cause under it", () => {
+    render(<IncidentList incidents={[
+      { id: "4", probe: "gateway", opened_at: "2026-11-26T10:00:00Z", closed_at: null, detail: "Router did not answer" },
+      { id: "5", probe: "foxace", opened_at: "2026-11-24T10:00:00Z", closed_at: "2026-11-24T11:05:00Z", detail: "" },
+    ]} />);
+    expect(screen.getByText("Router")).toBeInTheDocument();
+    expect(screen.getByText("foXaCe")).toBeInTheDocument();
+    expect(screen.getByText("Router did not answer")).toBeInTheDocument();
   });
   it("shows the empty state", () => {
     render(<IncidentList incidents={[]} />);
@@ -384,5 +499,144 @@ describe("AppHeader", () => {
     expect(seen[0]).toBe(container.querySelector("ha-menu-button"));
     unmount();
     expect(seen[seen.length - 1]).toBeNull();
+  });
+});
+
+describe("EchoTrace", () => {
+  const mockSummary = (name: "healthy" | "route" | "down" | "direct" | "empty") => createMockApi(name).summary();
+  const segs = (container: HTMLElement): HTMLElement[] => [...container.querySelectorAll<HTMLElement>("li[data-segment]")];
+  const seg = (container: HTMLElement, id: string): HTMLElement => {
+    const el = container.querySelector<HTMLElement>(`li[data-segment="${id}"]`);
+    if (!el) throw new Error(`no segment ${id}`);
+    return el;
+  };
+  const normalised = (colour: string): string => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = colour;
+    return probe.style.backgroundColor;
+  };
+  const block = (el: HTMLElement): HTMLElement => {
+    const b = el.querySelector<HTMLElement>("[data-bar]");
+    if (!b) throw new Error("no bar block");
+    return b;
+  };
+  it("shows five neutral segments with exact values when healthy", async () => {
+    const s = await mockSummary("healthy");
+    const { container } = render(<EchoTrace trace={s.trace} proxyMode causeStatus={s.cause_status} />);
+    expect(screen.getByRole("heading", { level: 2, name: "Last check" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Where the last check spent its time" })).toBeInTheDocument();
+    const items = segs(container);
+    expect(items.map((i) => i.dataset.segment)).toEqual(["gateway", "internet", "route", "alarmio", "ajax"]);
+    expect(items.every((i) => i.dataset.blamed === "false" && i.dataset.measured === "true")).toBe(true);
+    expect(items.every((i) => block(i).style.backgroundColor === normalised(chartSeries))).toBe(true);
+    expect(seg(container, "gateway")).toHaveTextContent("0.4 ms");
+    expect(seg(container, "internet")).toHaveTextContent("12 ms");
+    expect(seg(container, "route")).toHaveTextContent("172 ms");
+    expect(seg(container, "alarmio")).toHaveTextContent("3.0 ms");
+    expect(container.querySelector("[data-status-icon]")).toBeNull();
+    expect(screen.getByText("Total 367 ms")).toBeInTheDocument();
+  });
+  it("blames exactly the route, with its status icon and cause colour", async () => {
+    const s = await mockSummary("route");
+    const { container } = render(<EchoTrace trace={s.trace} proxyMode causeStatus={s.cause_status} />);
+    const blamed = segs(container).filter((i) => i.dataset.blamed === "true");
+    expect(blamed.map((i) => i.dataset.segment)).toEqual(["route"]);
+    expect(blamed[0]?.querySelector('[data-status-icon="triangle-alert"]')).not.toBeNull();
+    expect(blamed[0]).toHaveTextContent("Needs attention");
+    expect(block(seg(container, "route")).style.backgroundColor).toBe(normalised(statusColor.degraded));
+    expect(container.querySelectorAll("[data-status-icon]")).toHaveLength(1);
+    expect(block(seg(container, "ajax")).style.backgroundColor).toBe(normalised(chartSeries));
+    expect(block(seg(container, "route")).style.backgroundColor).not.toBe(block(seg(container, "ajax")).style.backgroundColor);
+    const text = (blamed[0]?.textContent ?? "").replace(/\s+/g, " ").trim();
+    expect(text).toBe("Needs attention: Route to Alarmio180 ms");
+  });
+  it("draws unmeasured segments as dashed placeholders that read as not reached", async () => {
+    const s = await mockSummary("down");
+    const { container } = render(<EchoTrace trace={s.trace} proxyMode causeStatus={s.cause_status} />);
+    for (const id of ["route", "alarmio", "ajax"]) {
+      const el = seg(container, id);
+      expect(el.dataset.measured).toBe("false");
+      expect(el).toHaveTextContent("–");
+      // The blamed hop was reached and did not answer; only hops beyond it were never reached.
+      expect(el).toHaveTextContent(id === "route" ? "no answer" : "not reached");
+      expect(block(el).style.borderStyle).toBe("dashed");
+      expect(block(el).style.borderColor).toBe(haVar.divider);
+    }
+    expect(seg(container, "route").dataset.blamed).toBe("true");
+    expect(seg(container, "route").querySelector('[data-status-icon="octagon-x"]')).not.toBeNull();
+  });
+  it("says no answer, not not reached, for a blamed segment without a value", () => {
+    const { container } = render(<EchoTrace trace={{ blamed: "gateway", segments: [{ id: "internet", ms: 12 }] }} proxyMode causeStatus="down" />);
+    expect(seg(container, "gateway")).toHaveTextContent("no answer");
+    expect(seg(container, "gateway")).not.toHaveTextContent("not reached");
+    expect(seg(container, "route")).toHaveTextContent("not reached");
+  });
+  it("explains the skipped check when Home Assistant was busy and there are no segments", () => {
+    render(<EchoTrace trace={{ blamed: "ha_host", segments: [] }} proxyMode causeStatus="degraded" />);
+    expect(screen.getByText("Home Assistant was busy, so this check was skipped.")).toBeInTheDocument();
+    expect(screen.queryByText(/No timing yet/)).toBeNull();
+  });
+  it("blames no segment for ha_host", async () => {
+    const s = await mockSummary("healthy");
+    const { container } = render(<EchoTrace trace={{ ...s.trace, blamed: "ha_host" }} proxyMode causeStatus="degraded" />);
+    expect(segs(container).some((i) => i.dataset.blamed === "true")).toBe(false);
+    expect(container.querySelector("[data-status-icon]")).toBeNull();
+  });
+  it("maps ajax_cloud to the ajax segment", async () => {
+    const s = await mockSummary("healthy");
+    const { container } = render(<EchoTrace trace={{ ...s.trace, blamed: "ajax_cloud" }} proxyMode causeStatus="down" />);
+    expect(segs(container).filter((i) => i.dataset.blamed === "true").map((i) => i.dataset.segment)).toEqual(["ajax"]);
+  });
+  it("shows three segments in direct mode", async () => {
+    const s = await mockSummary("direct");
+    const { container } = render(<EchoTrace trace={s.trace} proxyMode={false} causeStatus={s.cause_status} />);
+    expect(segs(container).map((i) => i.dataset.segment)).toEqual(["gateway", "internet", "ajax"]);
+  });
+  it("says there is no timing yet when empty and unblamed, with no list or total", async () => {
+    const s = await mockSummary("empty");
+    render(<EchoTrace trace={s.trace} proxyMode causeStatus={s.cause_status} />);
+    expect(screen.getByRole("heading", { level: 2, name: "Last check" })).toBeInTheDocument();
+    expect(screen.getByText("No timing yet. The first check runs within a minute.")).toBeInTheDocument();
+    expect(screen.queryByRole("list")).toBeNull();
+    expect(screen.queryByText(/Total/)).toBeNull();
+  });
+  it("treats a negative or NaN duration as not measured, never 0.0 ms or NaN", () => {
+    const { container } = render(
+      <EchoTrace trace={{ blamed: null, segments: [{ id: "gateway", ms: -1 }, { id: "internet", ms: Number.NaN }, { id: "route", ms: 5 }] }} proxyMode causeStatus="healthy" />,
+    );
+    for (const id of ["gateway", "internet"]) {
+      const el = seg(container, id);
+      expect(el.dataset.measured).toBe("false");
+      expect(el).toHaveTextContent("–");
+      expect(el).not.toHaveTextContent("0.0 ms");
+      expect(el).not.toHaveTextContent("NaN");
+    }
+    expect(seg(container, "route").dataset.measured).toBe("true");
+  });
+  it("reads the label before the value", async () => {
+    const s = await mockSummary("healthy");
+    const { container } = render(<EchoTrace trace={s.trace} proxyMode causeStatus={s.cause_status} />);
+    expect(seg(container, "route").textContent).toBe("Route to Alarmio172 ms");
+  });
+  it("shows the total only when two or more segments are measured", () => {
+    const { rerender } = render(<EchoTrace trace={{ blamed: "gateway", segments: [{ id: "gateway", ms: 5 }] }} proxyMode causeStatus="down" />);
+    expect(screen.queryByText(/Total/)).toBeNull();
+    rerender(<EchoTrace trace={{ blamed: "route", segments: [{ id: "gateway", ms: 0.4 }, { id: "internet", ms: 12 }] }} proxyMode causeStatus="down" />);
+    expect(screen.getByText("Total 12 ms")).toBeInTheDocument();
+  });
+});
+
+describe("VersionLine", () => {
+  it("shows both versions", () => {
+    render(<VersionLine version="1.4.0" foxaceVersion="0.39.4" />);
+    expect(screen.getByText("Alarmio Health 1.4.0 / foXaCe 0.39.4")).toBeInTheDocument();
+  });
+  it("shows only the integration version when foXaCe is unknown", () => {
+    render(<VersionLine version="1.4.0" foxaceVersion={null} />);
+    expect(screen.getByText("Alarmio Health 1.4.0")).toBeInTheDocument();
+  });
+  it("renders nothing for an empty version", () => {
+    const { container } = render(<VersionLine version="" foxaceVersion="0.39.4" />);
+    expect(container.childElementCount).toBe(0);
   });
 });

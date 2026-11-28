@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { verdict } from "./verdict";
-import type { Link } from "./types";
+import { summaryVerdict, verdict } from "./verdict";
+import type { Link, Summary } from "./types";
 
 const link = (id: Link["id"], status: Link["status"], detail = ""): Link => ({
   id, label: { ajax: "Ajax hub", alarmio: "Alarmio", foxace: "foXaCe", ha: "Home Assistant" }[id],
@@ -139,5 +139,95 @@ describe("verdict edge cases", () => {
     expect(v.tone).toBe("degraded");
     expect(v.headline).toBe("Home Assistant needs attention and Alarmio cannot be checked");
     expect(v.hint).toBe("ha detail");
+  });
+});
+
+describe("summaryVerdict", () => {
+  const base = (over: Partial<Summary>): Summary => ({
+    links: healthy, probes: {}, down_since: null, share_diagnostics: false, queued_heartbeats: 0, diagnostics_preview: null,
+    chain: [], trace: { blamed: null, segments: [] }, cause: "", cause_status: "unknown", integration_version: "0.2.0", ...over,
+  });
+  const downLinks = [link("ajax", "healthy"), link("alarmio", "down", "Alarmio did not answer."), link("foxace", "healthy"), link("ha", "healthy")];
+
+  it("uses the blame headline and the cause as the hint", () => {
+    const s = base({ trace: { blamed: "route", segments: [] }, cause: "The route took 180 ms.", cause_status: "degraded" });
+    expect(summaryVerdict(s, NOW)).toEqual({ tone: "degraded", headline: "The route to Alarmio is unreliable", hint: "The route took 180 ms." });
+  });
+
+  it("says down for a blamed gateway", () => {
+    const s = base({ trace: { blamed: "gateway", segments: [] }, cause: "No reply.", cause_status: "down" });
+    expect(summaryVerdict(s, NOW).headline).toBe("Your router is not answering");
+    expect(summaryVerdict(s, NOW).tone).toBe("down");
+  });
+
+  it("falls back to the legacy verdict without blame", () => {
+    expect(summaryVerdict(base({}), NOW)).toEqual(verdict(healthy, null, NOW));
+    const s = base({ links: downLinks, down_since: "2026-11-26T11:46:00Z" });
+    expect(summaryVerdict(s, NOW)).toEqual(verdict(downLinks, "2026-11-26T11:46:00Z", NOW));
+  });
+
+  it.each(["healthy", "unknown"] as const)("falls back when blamed but cause_status is %s", (cause_status) => {
+    const s = base({ links: downLinks, trace: { blamed: "alarmio", segments: [] }, cause: "x", cause_status });
+    expect(summaryVerdict(s, NOW)).toEqual(verdict(downLinks, null, NOW));
+  });
+
+  it("reads healthy in direct mode when the link view is unknown but every evaluated chain node is healthy", () => {
+    const links = [link("ajax", "healthy"), link("alarmio", "unknown"), link("foxace", "healthy"), link("ha", "healthy")];
+    const node = (id: "ajax_hub" | "gateway"): Summary["chain"][number] => ({ id, label: id, status: "healthy", latency_ms: 1, detail: "", evaluated: true });
+    const s = base({ links, chain: [node("ajax_hub"), node("gateway")], cause_status: "healthy" });
+    expect(summaryVerdict(s, NOW).tone).toBe("healthy");
+    expect(summaryVerdict(base({ links, chain: [], cause_status: "healthy" }), NOW).tone).toBe("unknown");
+  });
+
+  it("does not override an unknown link view in proxy mode or when another link is not healthy", () => {
+    const node = (id: "alarmio" | "gateway"): Summary["chain"][number] => ({ id, label: id, status: "healthy", latency_ms: 1, detail: "", evaluated: true });
+    const proxyLinks = [link("ajax", "healthy"), link("alarmio", "healthy"), link("foxace", "unknown"), link("ha", "healthy")];
+    expect(summaryVerdict(base({ links: proxyLinks, chain: [node("alarmio"), node("gateway")], cause_status: "healthy" }), NOW).tone).toBe("unknown");
+    const directLinks = [link("ajax", "healthy"), link("alarmio", "unknown"), link("foxace", "unknown"), link("ha", "healthy")];
+    expect(summaryVerdict(base({ links: directLinks, chain: [node("gateway")], cause_status: "healthy" }), NOW).tone).toBe("unknown");
+  });
+  describe("review fixes", () => {
+    type N = Summary["chain"][number];
+    const cn = (id: N["id"], status: N["status"] = "healthy", evaluated = true): N => ({ id, label: id, status, latency_ms: 1, detail: "", evaluated });
+    const directChain = (over: Partial<Record<N["id"], N>> = {}): N[] =>
+      (["ajax_hub", "ajax_cloud", "internet", "gateway", "ha"] as const).map((id) => over[id] ?? cn(id));
+    const directLinks = (over: Partial<Record<Link["id"], Link["status"]>> = {}): Link[] =>
+      (["ajax", "alarmio", "foxace", "ha"] as const).map((id) => link(id, over[id] ?? (id === "alarmio" ? "unknown" : "healthy"), id === "alarmio" ? "not used" : ""));
+
+    it("a degraded blame does not hide a down legacy link", () => {
+      const links = [link("ajax", "healthy"), link("alarmio", "healthy"), link("foxace", "down", "No events."), link("ha", "healthy")];
+      const s = base({ links, trace: { blamed: "alarmio", segments: [] }, cause: "slow", cause_status: "degraded" });
+      expect(summaryVerdict(s, NOW)).toEqual(verdict(links, null, NOW));
+      expect(summaryVerdict(s, NOW).headline).toBe("Events stopped at foXaCe");
+      const ha = base({ links, trace: { blamed: "ha_host", segments: [] }, cause: "busy", cause_status: "degraded" });
+      expect(summaryVerdict(ha, NOW).headline).toBe("Events stopped at foXaCe");
+    });
+
+    it("a down blame keeps its own headline over a down link", () => {
+      const links = [link("ajax", "healthy"), link("alarmio", "healthy"), link("foxace", "down"), link("ha", "healthy")];
+      const s = base({ links, trace: { blamed: "gateway", segments: [] }, cause: "No reply.", cause_status: "down" });
+      expect(summaryVerdict(s, NOW).headline).toBe("Your router is not answering");
+    });
+
+    it("direct mode never says Alarmio cannot be checked", () => {
+      const s = base({ links: directLinks({ ajax: "degraded" }), chain: directChain(), cause_status: "healthy" });
+      const v = summaryVerdict(s, NOW);
+      expect(v.headline).toBe("Alarm events are reaching Home Assistant, but Ajax hub needs attention");
+      expect(v.headline).not.toContain("Alarmio");
+    });
+
+    it("direct mode reads healthy when the router or the internet check is unknown", () => {
+      for (const id of ["gateway", "internet"] as const) {
+        const s = base({ links: directLinks(), chain: directChain({ [id]: cn(id, "unknown") }), cause_status: "healthy" });
+        expect(summaryVerdict(s, NOW).tone).toBe("healthy");
+      }
+    });
+
+    it("direct mode stays unknown for an unknown Ajax cloud and is not overridden by a degraded router", () => {
+      const cloud = base({ links: directLinks(), chain: directChain({ ajax_cloud: cn("ajax_cloud", "unknown") }), cause_status: "healthy" });
+      expect(summaryVerdict(cloud, NOW).tone).toBe("unknown");
+      const gw = base({ links: directLinks(), chain: directChain({ gateway: cn("gateway", "degraded") }), cause_status: "healthy" });
+      expect(summaryVerdict(gw, NOW).tone).toBe("unknown");
+    });
   });
 });

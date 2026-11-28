@@ -52,3 +52,69 @@ class FoxaceSnapshot:
     sse_connected: bool | None = None
     armed: bool | None = None
     devices: tuple[DeviceHealth, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class HopStats:
+    """Round-trip statistics for one network hop (gateway, internet anchor or the Alarmio server)."""
+
+    label: str
+    method: str  # "icmp" or "tcp"
+    sent: int
+    received: int
+    rtt_median_ms: float | None = None
+    jitter_ms: float | None = None
+
+    @property
+    def loss_pct(self) -> float:
+        """Percentage of probes that got no answer (0.0 when nothing was sent)."""
+        return 0.0 if self.sent <= 0 else round(100.0 * (self.sent - self.received) / self.sent, 1)
+
+
+@dataclass(frozen=True, slots=True)
+class StageTimings:
+    """Connect, TLS and wait times of one HTTP request, on this machine's clock. None = stage did not happen."""
+
+    connect_ms: float | None = None
+    tls_ms: float | None = None
+    wait_ms: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EchoResult:
+    """Outcome of one echo exchange with the Alarmio server."""
+
+    state: str  # "ok" | "slow" | "lost" | "unavailable"
+    server_ms: float | None = None
+    queue_ms: float | None = None
+    round_trip_ms: float | None = None
+    ajax: dict[str, float | bool | None] | None = None
+    sqs_lag_p95_ms: float | None = None
+    timings: StageTimings = StageTimings()
+    loss: tuple[str, ...] = ()  # earlier echoes settled by this reply: "request" | "reply" | "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class NetSnapshot:
+    """Everything the blame rule looks at for one cycle."""
+
+    gateway: HopStats | None
+    internet: HopStats | None
+    vps: HopStats | None
+    loop_lag_ms: float | None
+    icmp_mode: str
+    proxy_mode: bool
+    echo: EchoResult | None
+    ajax_direct_ok: bool | None = None
+    ajax_direct_ms: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """Which hop is to blame (None when nothing is wrong), with a plain-language sentence and the numbers."""
+
+    broken: str | None  # "ha_host" | "gateway" | "internet" | "route" | "alarmio" | "ajax_cloud" | None
+    status: Status
+    text: str
+    numbers: dict[str, float | None]
+    notes: tuple[str, ...] = ()

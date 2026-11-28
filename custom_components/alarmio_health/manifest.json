@@ -1,7 +1,7 @@
 {
   "domain": "alarmio_health",
   "name": "Alarmio Health",
-  "after_dependencies": ["ajax"],
+  "after_dependencies": ["ajax", "ping"],
   "codeowners": ["@alarmio-sales"],
   "config_flow": true,
   "dependencies": ["http", "frontend", "panel_custom", "recorder", "websocket_api"],
@@ -10,5 +10,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/alarmio/alarmio-health/issues",
   "requirements": [],
-  "version": "0.1.2"
+  "version": "0.2.1"
 }

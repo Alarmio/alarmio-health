@@ -11,16 +11,20 @@ import logging
 import math
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
-from .models import FoxaceSnapshot, ProbeResult, Status
+from .models import FoxaceSnapshot, ProbeResult, StageTimings, Status
+from .net.timing import StageRecorder
 
 _LOGGER = logging.getLogger(__name__)
 SCHEMA = 1
+SCHEMA_ECHO = 2
+SCHEMA2_RETRY_AFTER_S = 3600.0
 _RENEWING_DETAIL = "Alarmio is renewing the session. foXaCe does this automatically."
 _NOT_HTTPS_DETAIL = "Alarmio URL is not HTTPS, so the session token was not sent."
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -144,6 +148,22 @@ def _encode_error(payload: Any) -> Exception | None:
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class Exchange:
+    """The answer to the current heartbeat POST: HTTP status, parsed reply, stage timings and elapsed time."""
+
+    status: int
+    reply: dict[str, Any] | None
+    timings: StageTimings
+    elapsed_s: float
+    downgraded: bool = False
+
+
+def downgrade_to_schema1(payload: dict[str, Any]) -> dict[str, Any]:
+    """The same heartbeat as a schema-1 body: no echo, no net."""
+    return {**{k: v for k, v in payload.items() if k not in ("echo", "net")}, "schema": SCHEMA}
+
+
 def build_payload(
     results: dict[str, ProbeResult],
     *,
@@ -153,6 +173,8 @@ def build_payload(
     snapshot: FoxaceSnapshot | None,
     reconnects: int,
     ha_version: str,
+    net: dict[str, Any] | None = None,
+    echo: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
     """Build the heartbeat body. Diagnostics are included only when the user opted in.
 
@@ -205,6 +227,17 @@ def build_payload(
         "probes": probes,
         "diagnostics": diagnostics,
     }
+    if echo is not None:
+        try:
+            payload["schema"] = SCHEMA_ECHO
+            payload["echo"] = {"id": str(echo[0]), "seq": int(echo[1])}
+            payload["net"] = _jsonable(net or {})
+        except Exception as echo_err:  # noqa: BLE001 - never break the heartbeat over the echo
+            _log_build_failure("echo", echo_err)
+            payload["schema"] = SCHEMA
+            payload.pop("echo", None)
+            payload.pop("net", None)
+            failed = True
     err = _encode_error(payload)
     if err is None:
         try:
@@ -235,6 +268,9 @@ class HeartbeatClient:
         self._head: dict[str, Any] | None = None  # the payload the failure counter below refers to
         self._head_fails = 0
         self._rejections = 0  # consecutive 401/403 answers; reset by any confirmed 2xx
+        self.last_exchange: Exchange | None = None
+        self.current_attempted = False  # True once the current payload was actually POSTed this send
+        self._schema2_blocked_until = 0.0
 
     @property
     def queued(self) -> int:
@@ -300,6 +336,8 @@ class HeartbeatClient:
         self, proxy_url: str | None, token: str | None, payload: dict[str, Any], now: datetime
     ) -> ProbeResult:
         """Implementation of `send`; may raise, the caller guards it."""
+        self.last_exchange = None
+        self.current_attempted = False
         if not proxy_url or not token:
             return ProbeResult("session", Status.UNKNOWN, now, detail="No Alarmio session available yet.")
         if not self._https_ok(proxy_url):
@@ -345,7 +383,7 @@ class HeartbeatClient:
         if remaining <= 0:
             return self._catch_up(now, payload)
         post_started = time.monotonic()
-        outcome = await self._attempt(url, token, payload, now, min(_REQUEST_TIMEOUT_S, remaining))
+        outcome = await self._attempt(url, token, payload, now, min(_REQUEST_TIMEOUT_S, remaining), capture=True)
         latency_ms = (time.monotonic() - post_started) * 1000
         if isinstance(outcome, ProbeResult):
             self._queue.append(payload)
@@ -354,7 +392,7 @@ class HeartbeatClient:
         if outcome == 413 and payload.get("diagnostics") is not None:
             self._warn_once("payload-too-large", "Heartbeat payload too large (%s); retrying without diagnostics")
             payload = {**payload, "diagnostics": None}
-            outcome = await self._attempt(url, token, payload, now, _REQUEST_TIMEOUT_S)
+            outcome = await self._attempt(url, token, payload, now, _REQUEST_TIMEOUT_S, capture=True)
             if isinstance(outcome, ProbeResult):
                 self._queue.append(payload)
                 return outcome
@@ -377,21 +415,74 @@ class HeartbeatClient:
         return ProbeResult("session", Status.HEALTHY, now, latency_ms)
 
     async def _attempt(
-        self, url: str, token: str, body: dict[str, Any], now: datetime, timeout: float
+        self, url: str, token: str, body: dict[str, Any], now: datetime, timeout: float, capture: bool = False
     ) -> int | ProbeResult:
-        """POST one payload. Returns the HTTP status code, or an UNKNOWN result if the call itself failed."""
+        """POST one payload, downgrading schema-2 bodies to schema 1 while the server is known not to accept them."""
+        downgraded = False
+        if body.get("schema") == SCHEMA_ECHO and time.monotonic() < self._schema2_blocked_until:
+            body = downgrade_to_schema1(body)
+            downgraded = True
+        outcome = await self._post(url, token, body, now, timeout, capture, downgraded)
+        if outcome == 422 and body.get("schema") == SCHEMA_ECHO:
+            self._schema2_blocked_until = time.monotonic() + SCHEMA2_RETRY_AFTER_S
+            self._warn_once(
+                "schema2-rejected",
+                "Alarmio does not support timing echoes yet (%s); sending the basic heartbeat for an hour",
+            )
+            outcome = await self._post(url, token, downgrade_to_schema1(body), now, timeout, capture, downgraded=True)
+        return outcome
+
+    async def _post(
+        self,
+        url: str,
+        token: str,
+        body: dict[str, Any],
+        now: datetime,
+        timeout: float,
+        capture: bool = False,
+        downgraded: bool = False,
+    ) -> int | ProbeResult:
+        """POST one body. Returns the HTTP status code, or an UNKNOWN result if the call itself failed."""
+        # Connection: close on every POST, so none can reuse a pooled connection that died during an outage.
+        headers = {"X-Session-Token": token, "Content-Type": "application/json", "Connection": "close"}
+        extensions: dict[str, Any] = {}
+        recorder: StageRecorder | None = None
+        if capture:
+            self.current_attempted = True
+            recorder = StageRecorder()
+            extensions["trace"] = recorder
+        started = time.monotonic()
         try:
             response = await self._client.post(
                 url,
                 content=_encode(body),
-                headers={"X-Session-Token": token, "Content-Type": "application/json"},
+                headers=headers,
                 timeout=timeout,
                 follow_redirects=False,  # never carry the session token to another host
+                extensions=extensions or None,
             )
-            return int(response.status_code)
+            status = int(response.status_code)
+            if recorder is not None:
+                self.last_exchange = Exchange(
+                    status, self._reply(response, status), recorder.timings(), time.monotonic() - started, downgraded
+                )
+            return status
         except Exception as err:  # noqa: BLE001 - network errors and anything unexpected
+            if recorder is not None:
+                self.last_exchange = None  # no reply came back for this send, whatever an earlier try returned
             name = type(err).__name__
             return self._unknown(now, name, f"Not reporting to Alarmio ({name}). Will retry.")
+
+    @staticmethod
+    def _reply(response: httpx.Response, status: int) -> dict[str, Any] | None:
+        """The parsed JSON object of a 2xx answer, else None."""
+        if not 200 <= status < 300:
+            return None
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) else None
 
     def _rejection(self, now: datetime) -> tuple[ProbeResult, bool]:
         """Count a 401/403. Returns the result and whether it is final (DOWN) rather than a renewal in progress."""

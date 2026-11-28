@@ -33,7 +33,9 @@ async def probe_alarmio(
         )
     started = time.perf_counter()
     try:
-        response = await client.get(f"{proxy_url}/api/health", timeout=timeout, follow_redirects=False)
+        response = await client.get(
+            f"{proxy_url}/api/health", timeout=timeout, follow_redirects=False, headers={"Connection": "close"}
+        )
     except httpx.TimeoutException:
         return ProbeResult(
             "alarmio",

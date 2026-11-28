@@ -1,6 +1,32 @@
 {
   "config": {
-    "step": {"user": {"title": "Alarmio Health", "description": "Monitors the Ajax, Alarmio and foXaCe chain from this Home Assistant. Nothing to configure."}},
-    "abort": {"single_instance_allowed": "Alarmio Health is already set up."}
+    "step": {
+      "user": {
+        "title": "Alarmio Health",
+        "description": "Monitors the Ajax, Alarmio and foXaCe chain from this Home Assistant. Nothing to configure."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Alarmio Health is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Network checks",
+        "description": "Alarmio Health pings your router and an internet address to tell a local network problem from an Alarmio or Ajax problem. The addresses stay in Home Assistant and are never sent to Alarmio.",
+        "data": {
+          "gateway": "Router address (leave empty to detect it)",
+          "anchor_host": "Internet address to ping",
+          "anchor_enabled": "Check the internet connection"
+        },
+        "data_description": {
+          "anchor_host": "Default 1.1.1.1 (Cloudflare). Turn the check off if you do not want Home Assistant to contact a third party."
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Enter an IP address or host name only, without http:// or a port."
+    }
   }
 }
